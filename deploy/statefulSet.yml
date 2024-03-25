@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: redis-cluster
+  name: redis-cluster-statefulset
+spec:
+  selector:
+    matchLabels:
+      app: redis-cluster
+  serviceName: redis-cluster
+  replicas: 6
+  template:
+    metadata:
+      labels:
+        app: redis-cluster
+    spec:
+      # --- 測試用  (請評估你的環境是否有需要這段init contianer 本demo需要使用此配置)
+      initContainers:
+      - name: create-config-folder
+        image: busybox  
+        command: ["/bin/sh", "-c"]
+        args:
+          - |
+            if [ ! -d "/app/storage/redis/config" ]; then
+              mkdir -p /app/storage/redis/config;
+            fi
+             chmod -R 777 /app/storage/redis;
+        securityContext:
+          runAsUser: 0  # 使用 root 權限運行容器 這段指令不建議使用在product env
+        volumeMounts:
+          - mountPath: /app/storage
+            name: app-redis-storage
+      # --- 測試用 (請評估你的環境是否有需要這段init contianer 本demo需要使用此配置)
+      containers:
+      - env:
+        - name: TZ
+          value: Asia/Taipei
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: redis-cluster-secret
+              key: password
+        - name: MY_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        name: redis
+        image: redis:6.2.6-alpine
+        imagePullPolicy: Always
+        command:
+         - redis-server
+        args:
+          - "/usr/local/etc/redis/redis.conf"
+          - "--requirepass $(REDIS_PASSWORD)"
+          - "--masterauth $(REDIS_PASSWORD)"
+          - "--cluster-config-file /app/storage/redis/config/$(NODE_NAME)_nodes.conf"
+          - "--cluster-announce-ip $(MY_POD_IP)"
+        resources:
+          requests:
+            cpu: "200m"
+            memory: "2Gi"
+          limits:
+            cpu: "1"     
+            memory: "2Gi"    
+        ports:
+        - name: redis
+          containerPort: 6379
+          protocol: "TCP"
+        - name: cluster
+          containerPort: 16379
+          protocol: "TCP"
+        volumeMounts:
+        - mountPath: /usr/local/etc/redis/redis.conf
+          subPath: redis.conf
+          name: app-config
+          readOnly: true
+        - mountPath: /app/storage
+          name: app-redis-storage
+      volumes:
+      - name: app-config
+        configMap:
+          name: redis-cluster-configmap
+      - name: app-redis-storage
+        persistentVolumeClaim:
+            claimName: redis-app-pvc # 請
